@@ -155,6 +155,8 @@ The `trivy` GitHub Actions workflow builds and scans catalog, inventory, gateway
 
 HIGH and CRITICAL findings are uploaded to GitHub code scanning in separate categories for each service. Scanning is report-only (`exit-code: '0'`): findings do not block the workflow, but build, scanner, and upload errors still fail it. No images are pushed to a registry.
 
+Pull request scans check out and report against the PR head commit, not GitHub's temporary merge commit. Code-scanning rulesets can still block merging based on their configured alert thresholds, independently of whether the Actions workflow passes.
+
 ## Layout
 
 ```text
