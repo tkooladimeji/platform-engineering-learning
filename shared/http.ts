@@ -54,7 +54,7 @@ export function finishApp(app: Express): Express {
   return app;
 }
 
-export function listen(app: Express, service: string, defaultPort: number): void {
+export function listen(app: Express, service: string, defaultPort: number, dispose?: () => void): void {
   const port = z.coerce.number().int().min(1).max(65535).parse(process.env.PORT ?? defaultPort);
   const host = process.env.HOST ?? "127.0.0.1";
   const server = app.listen(port, host, () => {
@@ -62,11 +62,13 @@ export function listen(app: Express, service: string, defaultPort: number): void
   });
   server.on("error", (error) => {
     console.error(`${service} failed to start`, error);
+    dispose?.();
     process.exitCode = 1;
   });
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     process.once(signal, () => {
       server.close((error) => {
+        dispose?.();
         if (error) console.error(`${service} shutdown failed`, error);
         process.exit(error ? 1 : 0);
       });

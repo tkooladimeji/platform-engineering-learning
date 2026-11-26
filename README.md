@@ -1,14 +1,39 @@
 # Learning Kubernetes: Stockroom
 
-A React stock-management app backed by **three independently running Node.js/TypeScript services**. This first phase runs directly on your machine: no Dockerfiles, containers, Kubernetes manifests, Helm, Terraform, or cloud resources.
+A React stock-management app backed by **three independently running Node.js/TypeScript services** and Azure Cosmos DB for NoSQL. Docker Compose runs the frontend, services, and a persistent local Cosmos emulator together; no Azure account is needed.
 
 Create products, edit names/SKUs/descriptions, set quantities, search inventory, and delete products with their stock records. SKUs are unique, case-insensitive, and normalized to uppercase. Quantities must be non-negative safe integers.
 
 ## Requirements
 
 - Node.js **22.12 or later** and npm.
+- Docker with Docker Compose v2 for the local Cosmos emulator and containerized apps.
 - Optional: [nvm](https://github.com/nvm-sh/nvm) to select the version in `.nvmrc`.
 - Four available ports: `5173`, `4000`, `4001`, and `4002`.
+- Emulator ports: `8081` API, `1234` Data Explorer, `18082` health. The containerized frontend uses `8080`.
+
+## Run everything with Docker Compose
+
+From this repository's root:
+
+```bash
+docker compose up --build --wait
+```
+
+Open **http://127.0.0.1:8080**. Inspect database `stockroom` in **http://127.0.0.1:1234**.
+Compose waits for Cosmos readiness before starting catalog/inventory, then for the gateway before starting the frontend.
+
+If you already started a standalone emulator (for example, `cosmos-local`), stop it first: it uses the same host ports. Compose uses its own `stockroom_cosmos-data` volume; a standalone emulator's volume/data is not automatically imported or deleted.
+
+```bash
+docker compose restart catalog inventory
+docker compose down
+docker compose up --wait
+```
+
+Product metadata and quantities survive these restarts and container recreation. **Do not use `docker compose down --volumes` unless you intend to delete the local database.** The named volume is mounted at `/data`.
+
+The emulator uses local HTTP and does not enforce authentication. Published ports bind only to loopback; do not expose it publicly. Telemetry is disabled. It supports a subset of Cosmos features, so it is not a production database or a substitute for later Azure validation.
 
 ## Run everything locally
 
@@ -20,10 +45,11 @@ nvm install
 nvm use
 
 npm ci
+docker compose up -d --wait cosmos
 npm run dev
 ```
 
-Open **http://127.0.0.1:5173**. The catalog starts empty; add a product in the form.
+Open **http://127.0.0.1:5173**. The database starts empty on first use; add a product in the form. An already-running standalone emulator at `127.0.0.1:8081` also works: skip the Compose emulator command in that case.
 
 `npm run dev` starts all three backend services and the frontend together. Press `Ctrl+C` to stop them. The launcher stops the other processes if any process exits.
 
@@ -42,33 +68,39 @@ npm run dev:frontend
 | --- | --- | --- |
 | React frontend | http://127.0.0.1:5173 | Product forms, inventory table, search, quantity updates |
 | API gateway | http://127.0.0.1:4000 | Public API, validation, joining products and stock, coordinating create/delete |
-| Catalog service | http://127.0.0.1:4001 | Product metadata, unique SKUs, its own in-memory store |
-| Inventory service | http://127.0.0.1:4002 | Quantities keyed by product ID, its own in-memory store |
+| Catalog service | http://127.0.0.1:4001 | Product metadata and unique SKUs in Cosmos container `products` |
+| Inventory service | http://127.0.0.1:4002 | Quantities keyed by product ID in Cosmos container `inventory` |
 
 ```text
-Browser -> React/Vite -> API gateway -> Catalog service   -> product Map
-                                    -> Inventory service -> stock Map
+Browser -> React/Vite or Nginx -> API gateway -> Catalog   -> Cosmos: stockroom/products
+                                            -> Inventory -> Cosmos: stockroom/inventory
 ```
 
-The frontend calls `/api` on its own origin. Vite proxies these requests to the gateway; no browser-to-data-service calls or CORS configuration are needed.
+The frontend calls `/api` on its own origin. Vite or Nginx proxies these requests to the gateway; no browser-to-data-service calls or CORS configuration are needed.
 
-## In-memory data and service boundaries
+## Persistence and service boundaries
 
-The two data services have **separate process-local `Map` stores**, not a shared database or an external database server. Nothing is persisted to disk. Each service owns its data; the gateway owns no database.
+The data services own **separate Cosmos containers in one database**. The gateway and frontend own no database. There is no in-memory storage fallback. Local services create the database and their own containers on startup; a missing/unreachable emulator fails startup explicitly.
 
-**Restarting a data service erases only its store.** Stop and restart *all* services together for a clean reset. Backend watch mode also restarts a service when its source changes. A missing inventory record is reported as an error, not silently treated as zero. Restarting only the gateway or frontend does not erase data.
+Restarting a service, including backend watch mode, no longer erases data. A missing inventory record remains an explicit error, not zero or an automatic recreation. Old process-local data is not imported automatically.
+
+Catalog documents use UUID `id`, constant `catalogId: "catalog"`, partition key `/catalogId`, and unique-key policy `/sku`. The single partition makes normalized SKU uniqueness atomic across catalog replicas. Metadata updates and deletes use Cosmos ETags to reject stale writes with `409`. This small-learning-catalog design has Cosmos's 20 GB logical-partition limit; a larger catalog needs a redesigned uniqueness/partition strategy.
+
+Inventory documents use matching UUID `id`/`productId` and partition key `/productId`. Cosmos metadata and internal partition/id fields are removed from HTTP responses; existing API contracts are unchanged.
+
+An existing container with an incompatible partition or unique-key policy is rejected without deleting data. These policies cannot be changed in place: migrate the records into compatible containers or use a fresh database via `COSMOS_DATABASE`.
 
 Use the gateway for normal product operations. Direct data-service APIs are internal learning/debugging interfaces; direct writes can bypass lifecycle coordination and create inconsistent records.
 
-The gateway serializes operations within **one gateway process** and compensates known failures: failed stock creation removes the new catalog product; failed catalog deletion restores stock. This is **not a distributed transaction**. Timeouts, process crashes, failed cleanup, direct writes, or multiple gateway instances can leave partial/orphaned data. Errors are returned to the UI and logged; after an ambiguous write failure, refresh to check the result, or restart all services to reset memory. Do not blindly repeat a failed write.
+The gateway serializes operations within **one gateway process** and compensates known failures: failed stock creation removes the new catalog product; failed catalog deletion restores stock. This is **not a distributed transaction**. Timeouts, process crashes, failed cleanup, direct writes, or multiple gateway instances can leave partial/orphaned data. Errors are returned to the UI and logged; after an ambiguous write failure, refresh and reconcile affected records. Restarting services does not repair persistent inconsistencies. Do not blindly repeat a failed write.
 
 Quantity updates **set an absolute quantity**, rather than incrementing it. Multiple clients are last-write-wins. There is no authentication, authorization, reservation logic, or durable audit trail. The services bind to loopback by default and are intended only for trusted local learning, not production.
 
-When migrating to Cosmos DB, replace the catalog and inventory store operations with separate repositories/containers; keep their HTTP contracts. Persistence alone will not solve cross-service consistency: add idempotency, version/ETag-based updates, durable compensation/event delivery, and access control before scaling.
+Persistence alone does not solve cross-service consistency: add idempotency, durable compensation/event delivery, and access control before scaling.
 
 ## Configuration
 
-Environment variables are optional. Defaults work with `npm run dev`.
+Defaults work with `npm run dev` when the local emulator is running.
 
 | Variable | Applies to | Default |
 | --- | --- | --- |
@@ -77,8 +109,17 @@ Environment variables are optional. Defaults work with `npm run dev`.
 | `CATALOG_URL` | Gateway | `http://127.0.0.1:4001` |
 | `INVENTORY_URL` | Gateway | `http://127.0.0.1:4002` |
 | `GATEWAY_URL` | Vite dev/preview proxy | `http://127.0.0.1:4000` |
+| `COSMOS_ENDPOINT` | Catalog and inventory | `http://127.0.0.1:8081` on host; `http://cosmos:8081` in Compose |
+| `COSMOS_DATABASE` | Catalog and inventory | `stockroom` |
+| `COSMOS_KEY` | Catalog and inventory | Local emulator-only placeholder; required for Azure HTTPS endpoints |
 
 Pass variables in the command's environment; `.env` files are **not** automatically loaded by backend scripts.
+
+Both data services must target the same account/database. The emulator's key placeholder is not an Azure credential; the emulator ignores authentication. Endpoint discovery is disabled for local emulator endpoints so container clients are not redirected to `localhost`. HTTPS verification remains enabled for Azure.
+
+For a future Azure account, provision the database and the two containers with the policies above separately, then provide its HTTPS endpoint and account key through runtime secret configuration. Application startup only reads/verifies Azure containers; it does not create cloud resources. Do not commit real keys. Shared database throughput and an opted-in Cosmos free-tier account can minimize cost; this change does not provision Azure infrastructure.
+
+Existing Kubernetes/Helm examples do not deploy Cosmos. Before using updated service images there, provide a reachable `COSMOS_ENDPOINT`, `COSMOS_DATABASE`, and the appropriate credential, and use `/ready` for readiness probes (`/health` remains liveness). `localhost` in a pod is not the host emulator. On Docker Desktop, `http://host.docker.internal:8081` is recognized as a local emulator endpoint, but verify connectivity from your cluster.
 
 For example, to move the catalog to another port, use separate terminals:
 
@@ -124,19 +165,21 @@ curl -i -X DELETE http://127.0.0.1:4000/api/products/PRODUCT_ID
 | `PUT` | `/api/products/:id/quantity` | Set quantity |
 | `DELETE` | `/api/products/:id` | Remove product and stock |
 | `GET` | `/health` | Gateway process health |
-| `GET` | `/ready` | Gateway plus downstream service health |
+| `GET` | `/ready` | Gateway plus downstream service and Cosmos readiness |
 
-Every backend has `/health`. Catalog internal routes are `GET/POST /products` and `GET/PUT/DELETE /products/:id`. Inventory internal routes are `GET /inventory` and `GET/PUT/DELETE /inventory/:id`; its `PUT` is an upsert used by the gateway.
+Every backend has `/health` and `/ready`. Catalog internal routes are `GET/POST /products` and `GET/PUT/DELETE /products/:id`. Inventory internal routes are `GET /inventory` and `GET/PUT/DELETE /inventory/:id`; its `PUT` is an upsert used by the gateway.
 
 ## Build and check
 
 ```bash
 npm run typecheck
+# Start Cosmos first (skip this if your standalone emulator is already running).
+docker compose up -d --wait cosmos
 npm test
 npm run build
 ```
 
-Tests start real HTTP listeners on ephemeral loopback ports. They cover the CRUD lifecycle, validation, unique SKUs, concurrent mutations, dependency errors, and compensating operations.
+Tests use the real local emulator and HTTP listeners on ephemeral loopback ports. Each test creates/deletes only its own randomly named `stockroom-test-*` database, never the application database; Azure endpoints are rejected. They cover CRUD, validation, atomic SKU uniqueness across replicas, stale ETags, persisted data across client/service recreation, incompatible containers, dependency errors, and compensation. If your emulator API uses a different port, pass `COSMOS_ENDPOINT=http://127.0.0.1:PORT npm test`.
 
 After building, run these in four terminals:
 
@@ -164,18 +207,16 @@ frontend/                  React UI and Vite config
 services/catalog/src/      Product metadata service
 services/inventory/src/    Stock quantity service
 services/gateway/src/      Public API and service coordination
-shared/                    HTTP helpers, contracts, validation schemas
-tests/                     Service integration tests
+shared/                    Cosmos connection, HTTP helpers, contracts, schemas
+tests/                     Cosmos-backed HTTP integration tests
+docker-compose.yaml        Four applications plus persistent Cosmos emulator
+helm/ and k8s/             Existing local Kubernetes deployment examples
 ```
 
 One root dependency manifest and lockfile keep this learning monorepo simple. Each service has its own entry point, process, port, and store; they share contracts/helpers but do not import one another's implementation.
 
-## Later phases (not implemented)
+## Later phases
 
-1. Add per-project Docker builds and Docker Compose.
-2. Run locally on Kubernetes and package deployments with Helm.
-3. Push to GitHub and add an ArgoCD GitOps flow.
-4. Provision AKS and supporting Azure resources with Terraform.
-5. Migrate process-local stores to Cosmos DB with durable consistency and security controls.
-
-This repository is initialized locally only. No GitHub repository, remote, push, or Azure resources have been created.
+1. Connect the Kubernetes/Helm deployments to a reachable Cosmos endpoint.
+2. Add an ArgoCD GitOps flow and provision AKS/supporting Azure resources through the separate resources repository.
+3. Provision a cloud Cosmos account, replace development credentials with production identity/access controls, and add durable cross-service consistency.

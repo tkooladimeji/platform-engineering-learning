@@ -1,27 +1,26 @@
-import type { Stock } from "../../../shared/contracts.js";
-import { createApp, finishApp, HttpError, productId, quantityInput } from "../../../shared/http.js";
+import { createApp, finishApp, productId, quantityInput } from "../../../shared/http.js";
+import type { InventoryStore } from "./store.js";
 
-export function createInventoryApp() {
-  const inventory = new Map<string, Stock>();
+export function createInventoryApp(store: InventoryStore) {
   const app = createApp("inventory");
 
-  app.get("/inventory", (_request, response) => {
-    response.json([...inventory.values()]);
+  app.get("/ready", async (_request, response) => {
+    await store.ready();
+    response.json({ service: "inventory", status: "ready" });
   });
-  app.get("/inventory/:id", (request, response) => {
-    const stock = inventory.get(productId(request));
-    if (!stock) throw new HttpError(404, "Stock record not found");
-    response.json(stock);
+  app.get("/inventory", async (_request, response) => {
+    response.json(await store.list());
   });
-  app.put("/inventory/:id", (request, response) => {
+  app.get("/inventory/:id", async (request, response) => {
+    response.json(await store.get(productId(request)));
+  });
+  app.put("/inventory/:id", async (request, response) => {
     const id = productId(request);
     const { quantity } = quantityInput.parse(request.body);
-    const stock: Stock = { productId: id, quantity, updatedAt: new Date().toISOString() };
-    inventory.set(id, stock);
-    response.json(stock);
+    response.json(await store.put(id, quantity));
   });
-  app.delete("/inventory/:id", (request, response) => {
-    if (!inventory.delete(productId(request))) throw new HttpError(404, "Stock record not found");
+  app.delete("/inventory/:id", async (request, response) => {
+    await store.delete(productId(request));
     response.status(204).end();
   });
   return finishApp(app);

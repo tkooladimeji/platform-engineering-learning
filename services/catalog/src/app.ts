@@ -1,51 +1,30 @@
-import { randomUUID } from "node:crypto";
-import type { Product } from "../../../shared/contracts.js";
-import { createApp, finishApp, HttpError, productId, productInput } from "../../../shared/http.js";
+import { createApp, finishApp, productId, productInput } from "../../../shared/http.js";
+import type { CatalogStore } from "./store.js";
 
-// This process owns its store; a future Cosmos repository can replace these operations.
-export function createCatalogApp() {
-  const products = new Map<string, Product>();
+export function createCatalogApp(store: CatalogStore) {
   const app = createApp("catalog");
 
-  function find(id: string): Product {
-    const product = products.get(id);
-    if (!product) throw new HttpError(404, "Product not found");
-    return product;
-  }
-
-  function ensureUniqueSku(sku: string, excludingId?: string): void {
-    if ([...products.values()].some((product) => product.sku === sku && product.id !== excludingId)) {
-      throw new HttpError(409, "A product with this SKU already exists");
-    }
-  }
-
-  app.get("/products", (_request, response) => {
-    response.json([...products.values()]);
+  app.get("/ready", async (_request, response) => {
+    await store.ready();
+    response.json({ service: "catalog", status: "ready" });
   });
-  app.get("/products/:id", (request, response) => {
-    response.json(find(productId(request)));
+  app.get("/products", async (_request, response) => {
+    response.json(await store.list());
   });
-  app.post("/products", (request, response) => {
+  app.get("/products/:id", async (request, response) => {
+    response.json(await store.get(productId(request)));
+  });
+  app.post("/products", async (request, response) => {
     const input = productInput.parse(request.body);
-    ensureUniqueSku(input.sku);
-    const now = new Date().toISOString();
-    const product: Product = { ...input, id: randomUUID(), createdAt: now, updatedAt: now };
-    products.set(product.id, product);
-    response.status(201).json(product);
+    response.status(201).json(await store.create(input));
   });
-  app.put("/products/:id", (request, response) => {
+  app.put("/products/:id", async (request, response) => {
     const id = productId(request);
-    const existing = find(id);
     const input = productInput.parse(request.body);
-    ensureUniqueSku(input.sku, id);
-    const product: Product = { ...existing, ...input, updatedAt: new Date().toISOString() };
-    products.set(id, product);
-    response.json(product);
+    response.json(await store.update(id, input));
   });
-  app.delete("/products/:id", (request, response) => {
-    const id = productId(request);
-    find(id);
-    products.delete(id);
+  app.delete("/products/:id", async (request, response) => {
+    await store.delete(productId(request));
     response.status(204).end();
   });
   return finishApp(app);

@@ -21,6 +21,7 @@
     "preview:frontend": "vite preview --config frontend/vite.config.ts"
   },
   "dependencies": {
+    "@azure/cosmos": "^4.10.2",
     "express": "^5.1.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",

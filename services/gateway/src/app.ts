@@ -53,7 +53,7 @@ export function createGatewayApp({ catalogUrl, inventoryUrl, timeoutMs = 3000 }:
       stock = await request(inventoryUrl, `/inventory/${product.id}`, stockRecord);
     } catch (error) {
       if (error instanceof HttpError && error.status === 404) {
-        throw new HttpError(502, "Product has no stock record. Restart all services to reset the local stores.");
+        throw new HttpError(502, "Product has no stock record. Reconcile the catalog and inventory records before retrying.");
       }
       throw error;
     }
@@ -62,8 +62,8 @@ export function createGatewayApp({ catalogUrl, inventoryUrl, timeoutMs = 3000 }:
 
   app.get("/ready", async (_request, response) => {
     await Promise.all([
-      request(catalogUrl, "/health", z.object({ status: z.literal("ok") })),
-      request(inventoryUrl, "/health", z.object({ status: z.literal("ok") })),
+      request(catalogUrl, "/ready", z.object({ status: z.literal("ready") })),
+      request(inventoryUrl, "/ready", z.object({ status: z.literal("ready") })),
     ]);
     response.json({ service: "gateway", status: "ready" });
   });
@@ -78,7 +78,7 @@ export function createGatewayApp({ catalogUrl, inventoryUrl, timeoutMs = 3000 }:
       return catalog.map((product): StockedProduct => {
         const stock = stockById.get(product.id);
         if (!stock) {
-          throw new HttpError(502, "Product has no stock record. Restart all services to reset the local stores.");
+          throw new HttpError(502, "Product has no stock record. Reconcile the catalog and inventory records before retrying.");
         }
         return { ...product, quantity: stock.quantity, stockUpdatedAt: stock.updatedAt };
       });
@@ -99,7 +99,7 @@ export function createGatewayApp({ catalogUrl, inventoryUrl, timeoutMs = 3000 }:
           await request(catalogUrl, `/products/${created.id}`, z.undefined(), "DELETE");
         } catch (rollbackError) {
           console.error("Product creation rollback failed", { error, rollbackError, productId: created.id });
-          throw new HttpError(502, "Creation and cleanup failed. Restart all services to reset the local stores.");
+          throw new HttpError(502, "Creation and cleanup failed. Reconcile the catalog and inventory records before retrying.");
         }
         throw error;
       }
@@ -124,7 +124,7 @@ export function createGatewayApp({ catalogUrl, inventoryUrl, timeoutMs = 3000 }:
     const input = quantityInput.parse(req.body);
     const product = await serial(async () => {
       const existing = await request(catalogUrl, `/products/${id}`, productRecord);
-      // Do not silently recreate stock lost through an inventory process restart.
+      // Missing stock needs reconciliation, not an implicit recreation.
       await withStock(existing);
       const stock = await request(inventoryUrl, `/inventory/${id}`, stockRecord, "PUT", input);
       return { ...existing, quantity: stock.quantity, stockUpdatedAt: stock.updatedAt };
@@ -145,7 +145,7 @@ export function createGatewayApp({ catalogUrl, inventoryUrl, timeoutMs = 3000 }:
           await request(inventoryUrl, `/inventory/${id}`, stockRecord, "PUT", { quantity: stock.quantity });
         } catch (rollbackError) {
           console.error("Product deletion rollback failed", { error, rollbackError, productId: id });
-          throw new HttpError(502, "Deletion and stock restore failed. Restart all services to reset the local stores.");
+          throw new HttpError(502, "Deletion and stock restore failed. Reconcile the catalog and inventory records before retrying.");
         }
         throw error;
       }
