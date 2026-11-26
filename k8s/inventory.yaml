@@ -29,10 +29,44 @@ spec:
       labels:
         app: inventory
     spec:
+      initContainers:
+        - name: wait-for-cosmos
+          image: stockroom-inventory:local-cosmos-v1
+          imagePullPolicy: IfNotPresent
+          command:
+            - node
+            - -e
+            - |
+              async function wait() {
+                for (let attempt = 0; attempt < 60; attempt++) {
+                  try {
+                    const response = await fetch("http://cosmos:8080/ready", {
+                      signal: AbortSignal.timeout(3000),
+                    });
+                    if (response.ok) return;
+                    console.error(`Cosmos is not ready: HTTP ${response.status}`);
+                  } catch (error) {
+                    console.error("Waiting for Cosmos:", error.message);
+                  }
+                  await new Promise(resolve => setTimeout(resolve, 3000));
+                }
+                throw new Error("Cosmos did not become ready before the startup deadline");
+              }
+              wait().catch(error => { console.error(error); process.exit(1); });
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "64Mi"
+            limits:
+              cpu: "250m"
+              memory: "128Mi"
       containers:
         - name: inventory
-          image: stockroom-inventory:local-v1
+          image: stockroom-inventory:local-cosmos-v1
           imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: cosmos-config
           ports:
             - name: http
               containerPort: 4002
@@ -52,7 +86,7 @@ spec:
             failureThreshold: 30
           readinessProbe:
             httpGet:
-              path: /health
+              path: /ready
               port: http
             periodSeconds: 5
             timeoutSeconds: 5

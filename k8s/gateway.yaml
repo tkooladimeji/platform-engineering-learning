@@ -31,7 +31,7 @@ spec:
     spec:
       containers:
         - name: gateway
-          image: stockroom-gateway:local-v1
+          image: stockroom-gateway:local-cosmos-v1
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef:
@@ -48,7 +48,7 @@ spec:
               memory: "128Mi"
           startupProbe:
             httpGet:
-              path: /ready
+              path: /health
               port: http
             periodSeconds: 2
             timeoutSeconds: 2
@@ -61,7 +61,7 @@ spec:
             timeoutSeconds: 5
           livenessProbe:
             httpGet:
-              path: /ready
+              path: /health
               port: http
             periodSeconds: 10
             timeoutSeconds: 2

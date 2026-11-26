@@ -11,3 +11,12 @@ metadata:
 data:
   CATALOG_URL: http://catalog:4001
   INVENTORY_URL: http://inventory:4002
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cosmos-config
+  namespace: stockroom
+data:
+  COSMOS_ENDPOINT: http://cosmos:8081
+  COSMOS_DATABASE: stockroom

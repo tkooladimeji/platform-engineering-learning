@@ -35,6 +35,49 @@ Product metadata and quantities survive these restarts and container recreation.
 
 The emulator uses local HTTP and does not enforce authentication. Published ports bind only to loopback; do not expose it publicly. Telemetry is disabled. It supports a subset of Cosmos features, so it is not a production database or a substitute for later Azure validation.
 
+## Run on local Kubernetes
+
+The `k8s/` manifests run Cosmos **inside the cluster**, with an internal headless Service and a single-replica StatefulSet. A 5 GiB persistent volume claim (`data-cosmos-0`) mounts at `/data`. Catalog and inventory read `cosmos-config`, wait for emulator readiness in init containers, and use `/ready` for database-aware readiness checks. Backend liveness uses `/health`; Cosmos liveness uses `/alive`.
+
+Use a trusted local cluster, not AKS or production: the emulator does not enforce authentication. The commands below explicitly target Docker Desktop. The cluster needs a default dynamic StorageClass (Docker Desktop's `standard` works) and enough memory for Cosmos's 1 GiB request/4 GiB limit plus the applications.
+
+Build the new image tags from the repository root; old `local-v1` images do not contain the Cosmos migration:
+
+```bash
+docker build -f services/catalog/Dockerfile -t stockroom-catalog:local-cosmos-v1 .
+docker build -f services/inventory/Dockerfile -t stockroom-inventory:local-cosmos-v1 .
+docker build -f services/gateway/Dockerfile -t stockroom-gateway:local-cosmos-v1 .
+docker build -f frontend/Dockerfile -t stockroom-frontend:local-cosmos-v1 .
+```
+
+On Docker Desktop with the [containerd image store](https://docs.docker.com/desktop/use-desktop/kubernetes/), these locally built images are available to the cluster without pushing them to a registry. For a standalone kind cluster, explicitly load the four images with `kind load docker-image IMAGE... --name YOUR_CLUSTER`. For later code changes, use a fresh tag and update the manifests rather than relying on cached mutable tags.
+
+```bash
+kubectl --context docker-desktop get storageclass
+kubectl --context docker-desktop apply -f k8s/config.yaml
+kubectl --context docker-desktop apply -f k8s/
+kubectl --context docker-desktop rollout status statefulset/cosmos -n stockroom --timeout=300s
+kubectl --context docker-desktop wait --for=condition=Available \
+  deployment/catalog deployment/inventory deployment/gateway deployment/frontend \
+  -n stockroom --timeout=300s
+kubectl --context docker-desktop port-forward -n stockroom \
+  service/frontend --address 127.0.0.1 18080:8080
+```
+
+Open **http://127.0.0.1:18080**. This does not conflict with the Compose frontend on `8080`. Kubernetes starts with its **own database**: Compose data is not imported, shared, or deleted.
+
+To inspect the Kubernetes database in Data Explorer, first stop Compose **without deleting its volume**, then forward both emulator ports in another terminal:
+
+```bash
+docker compose down
+kubectl --context docker-desktop port-forward -n stockroom \
+  service/cosmos --address 127.0.0.1 8081:8081 1234:1234
+```
+
+Open **http://127.0.0.1:1234**. Data Explorer's default API endpoint uses port `8081`; forwarding Explorer alone while the Compose API is running could show the wrong database.
+
+Replacing the Cosmos pod retains its database through the PVC. **Deleting `data-cosmos-0`, deleting the `stockroom` namespace, or resetting the local cluster can erase Kubernetes data.** Keep the emulator at one replica; additional emulator replicas would have independent databases, not shared or replicated state.
+
 ## Run everything locally
 
 From this repository's root:
@@ -119,7 +162,7 @@ Both data services must target the same account/database. The emulator's key pla
 
 For a future Azure account, provision the database and the two containers with the policies above separately, then provide its HTTPS endpoint and account key through runtime secret configuration. Application startup only reads/verifies Azure containers; it does not create cloud resources. Do not commit real keys. Shared database throughput and an opted-in Cosmos free-tier account can minimize cost; this change does not provision Azure infrastructure.
 
-Existing Kubernetes/Helm examples do not deploy Cosmos. Before using updated service images there, provide a reachable `COSMOS_ENDPOINT`, `COSMOS_DATABASE`, and the appropriate credential, and use `/ready` for readiness probes (`/health` remains liveness). `localhost` in a pod is not the host emulator. On Docker Desktop, `http://host.docker.internal:8081` is recognized as a local emulator endpoint, but verify connectivity from your cluster.
+The raw `k8s/` manifests provide the cluster-local emulator configuration above. The Helm charts are not updated by this change: before using the new images with Helm, configure a reachable `COSMOS_ENDPOINT`, `COSMOS_DATABASE`, the appropriate credential, and `/ready` probes (`/health` remains liveness). `localhost` in a pod is not the host emulator.
 
 For example, to move the catalog to another port, use separate terminals:
 
@@ -217,6 +260,6 @@ One root dependency manifest and lockfile keep this learning monorepo simple. Ea
 
 ## Later phases
 
-1. Connect the Kubernetes/Helm deployments to a reachable Cosmos endpoint.
+1. Add the equivalent Cosmos configuration to the Helm deployments.
 2. Add an ArgoCD GitOps flow and provision AKS/supporting Azure resources through the separate resources repository.
 3. Provision a cloud Cosmos account, replace development credentials with production identity/access controls, and add durable cross-service consistency.
