@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: stockroom
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gateway-config
+  namespace: stockroom
+data:
+  CATALOG_URL: http://catalog:4001
+  INVENTORY_URL: http://inventory:4002

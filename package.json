@@ -1,0 +1,40 @@
+{
+  "name": "learning-kubernetes",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "concurrently --kill-others --names catalog,inventory,gateway,frontend \"npm:dev:catalog\" \"npm:dev:inventory\" \"npm:dev:gateway\" \"npm:dev:frontend\"",
+    "dev:catalog": "tsx watch services/catalog/src/index.ts",
+    "dev:inventory": "tsx watch services/inventory/src/index.ts",
+    "dev:gateway": "tsx watch services/gateway/src/index.ts",
+    "dev:frontend": "vite --config frontend/vite.config.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.server.json && tsc --noEmit -p frontend/tsconfig.json",
+    "build": "tsc -p tsconfig.server.json && tsc --noEmit -p frontend/tsconfig.json && vite build --config frontend/vite.config.ts",
+    "test": "tsx --test tests/*.test.ts",
+    "start:catalog": "node dist/services/catalog/src/index.js",
+    "start:inventory": "node dist/services/inventory/src/index.js",
+    "start:gateway": "node dist/services/gateway/src/index.js",
+    "preview:frontend": "vite preview --config frontend/vite.config.ts"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/node": "^22.18.0",
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^5.0.2",
+    "concurrently": "^9.2.1",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.3"
+  }
+}

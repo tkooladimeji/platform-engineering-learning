@@ -1,0 +1,8 @@
+fullnameOverride: inventory
+
+image:
+  repository: stockroom-inventory
+  tag: local-v1
+
+service:
+  port: 4002

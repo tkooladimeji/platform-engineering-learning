@@ -1,0 +1,71 @@
+name: stockroom
+
+services:
+  catalog:
+    build:
+      context: .
+      dockerfile: services/catalog/Dockerfile
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:4001/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  inventory:
+    build:
+      context: .
+      dockerfile: services/inventory/Dockerfile
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:4002/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  gateway:
+    build:
+      context: .
+      dockerfile: services/gateway/Dockerfile
+    environment:
+      - CATALOG_URL=http://catalog:4001
+      - INVENTORY_URL=http://inventory:4002
+    ports:
+      - "127.0.0.1:4000:4000"
+    depends_on:
+      catalog:
+        condition: service_healthy
+      inventory:
+        condition: service_healthy
+    networks:
+      default:
+        aliases:
+          - stockroom-gateway
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:4000/ready').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      gateway:
+        condition: service_healthy

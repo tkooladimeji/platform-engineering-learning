@@ -1,0 +1,8 @@
+fullnameOverride: catalog
+
+image:
+  repository: stockroom-catalog
+  tag: local-v1
+
+service:
+  port: 4001

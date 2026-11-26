@@ -1,0 +1,19 @@
+fullnameOverride: stockroom-gateway
+
+image:
+  repository: stockroom-gateway
+  tag: local-v1
+
+service:
+  port: 4000
+
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: http
+
+env:
+  - name: CATALOG_URL
+    value: http://catalog:4001
+  - name: INVENTORY_URL
+    value: http://inventory:4002
