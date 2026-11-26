@@ -1,0 +1,70 @@
+# This workflow uses actions that are not certified by GitHub.
+# They are provided by a third-party and are governed by
+# separate terms of service, privacy policy, and support
+# documentation.
+
+name: trivy
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    permissions:
+      contents: read # for actions/checkout to fetch code
+      security-events: write # for github/codeql-action/upload-sarif to upload SARIF results
+      actions: read # only required for a private repository by github/codeql-action/upload-sarif to get the Action run status
+    name: Build (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    env:
+      SCAN_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      SCAN_REF: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/head', github.event.number) || github.ref }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: catalog
+            dockerfile: services/catalog/Dockerfile
+          - service: inventory
+            dockerfile: services/inventory/Dockerfile
+          - service: gateway
+            dockerfile: services/gateway/Dockerfile
+          - service: frontend
+            dockerfile: frontend/Dockerfile
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SCAN_SHA }}
+
+      - name: Build an image from Dockerfile
+        run: |
+          docker build \
+            --file "${{ matrix.dockerfile }}" \
+            --tag "stockroom-${{ matrix.service }}:${SCAN_SHA}" \
+            .
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: 'stockroom-${{ matrix.service }}:${{ env.SCAN_SHA }}'
+          format: 'sarif'
+          output: 'trivy-${{ matrix.service }}.sarif'
+          severity: 'CRITICAL,HIGH'
+          limit-severities-for-sarif: 'true'
+          scanners: 'vuln'
+          exit-code: '0'
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-${{ matrix.service }}.sarif'
+          category: 'trivy-${{ matrix.service }}'
+          ref: ${{ env.SCAN_REF }}
+          sha: ${{ env.SCAN_SHA }}

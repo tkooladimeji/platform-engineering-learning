@@ -149,6 +149,14 @@ npm run preview:frontend
 
 Open **http://127.0.0.1:4173** for the built frontend preview. Vite preview is a local convenience server, not a production deployment server.
 
+## Container vulnerability scanning
+
+The `trivy` GitHub Actions workflow builds and scans catalog, inventory, gateway, and frontend images on pushes and pull requests to `main`. Each build uses its own Dockerfile with the repository root as the build context.
+
+HIGH and CRITICAL findings are uploaded to GitHub code scanning in separate categories for each service. Scanning is report-only (`exit-code: '0'`): findings do not block the workflow, but build, scanner, and upload errors still fail it. No images are pushed to a registry.
+
+Pull request scans check out and report against the PR head commit, not GitHub's temporary merge commit. Code-scanning rulesets can still block merging based on their configured alert thresholds, independently of whether the Actions workflow passes.
+
 ## Layout
 
 ```text
